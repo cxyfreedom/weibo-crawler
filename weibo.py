@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# -*- coding: UTF-8 -*-
+# -*- coding: utf-8 -*-
 
 import codecs
 import copy
@@ -40,6 +40,8 @@ class Weibo(object):
             since_date = date.today() - timedelta(since_date)
         since_date = str(since_date)
         self.since_date = since_date  # 起始时间，即爬取发布日期从该值到现在的微博，形式为yyyy-mm-dd
+        self.start_page = config.get('start_page',
+                                     1)  # 开始爬的页，如果中途被限制而结束可以用此定义开始页码
         self.write_mode = config[
             'write_mode']  # 结果信息保存类型，为list形式，可包含csv、mongo和mysql三种类型
         self.original_pic_download = config[
@@ -57,7 +59,7 @@ class Weibo(object):
         self.headers = {'User_Agent': user_agent, 'Cookie': cookie}
         self.mysql_config = config.get('mysql_config')  # MySQL数据库连接配置，可以不填
         user_id_list = config['user_id_list']
-        query_list = config.get('query_list') or [];
+        query_list = config.get('query_list') or []
         if isinstance(query_list, str):
             query_list = query_list.split(',')
         self.query_list = query_list
@@ -155,11 +157,12 @@ class Weibo(object):
     def get_weibo_json(self, page):
         """获取网页中微博json数据"""
         params = {
-                'container_ext': 'profile_uid:' + str(self.user_config['user_id']),
-                'containerid': '100103type=401&q=' + self.query,
-                'page_type': 'searchall'
-                } if self.query else {
-                        'containerid': '107603' + str(self.user_config['user_id'])}
+            'container_ext': 'profile_uid:' + str(self.user_config['user_id']),
+            'containerid': '100103type=401&q=' + self.query,
+            'page_type': 'searchall'
+        } if self.query else {
+            'containerid': '107603' + str(self.user_config['user_id'])
+        }
         params['page'] = page
         js = self.get_json(params)
         return js
@@ -333,9 +336,9 @@ class Weibo(object):
         video_url = ''
         video_url_list = []
         if weibo_info.get('page_info'):
-            if weibo_info['page_info'].get('media_info') and weibo_info[
-                    'page_info'].get('type') == 'video':
-                media_info = weibo_info['page_info']['media_info']
+            if weibo_info['page_info'].get(
+                    'urls') and weibo_info['page_info'].get('type') == 'video':
+                media_info = weibo_info['page_info']['urls']
                 video_url = media_info.get('mp4_720p_mp4')
                 if not video_url:
                     video_url = media_info.get('mp4_hd_url')
@@ -359,12 +362,14 @@ class Weibo(object):
                 s = requests.Session()
                 s.mount(url, HTTPAdapter(max_retries=5))
                 flag = True
-                while flag:
+                try_count = 0
+                while flag and try_count < 5:
                     flag = False
                     downloaded = s.get(url,
                                        headers=self.headers,
                                        timeout=(5, 10),
                                        verify=False)
+                    try_count += 1
                     if (url.endswith(('jpg', 'jpeg'))
                             and not downloaded.content.endswith(b'\xff\xd9')
                         ) or (url.endswith('png') and
@@ -526,9 +531,10 @@ class Weibo(object):
         elif u'昨天' in created_at:
             day = timedelta(days=1)
             created_at = (datetime.now() - day).strftime('%Y-%m-%d')
-        elif created_at.count('-') == 1:
-            year = datetime.now().strftime('%Y')
-            created_at = year + '-' + created_at
+        else:
+            created_at = created_at.replace('+0800 ', '')
+            temp = datetime.strptime(created_at, '%c')
+            created_at = datetime.strftime(temp, '%Y-%m-%d')
         return created_at
 
     def standardize_info(self, weibo):
@@ -692,9 +698,13 @@ class Weibo(object):
                                 if self.is_pinned_weibo(w):
                                     continue
                                 else:
-                                    logger.info(u'{}已获取{}({})的第{}页{}微博{}'.format(
-                                        '-' * 30, self.user['screen_name'],
-                                        self.user['id'], page, '包含"' + self.query + '"的' if self.query else '', '-' * 30))
+                                    logger.info(
+                                        u'{}已获取{}({})的第{}页{}微博{}'.format(
+                                            '-' * 30, self.user['screen_name'],
+                                            self.user['id'], page,
+                                            '包含"' + self.query +
+                                            '"的' if self.query else '',
+                                            '-' * 30))
                                     return True
                             if (not self.filter) or (
                                     'retweet' not in wb.keys()):
@@ -1069,7 +1079,8 @@ class Weibo(object):
                 page1 = 0
                 random_pages = random.randint(1, 2)
                 self.start_date = datetime.now().strftime('%Y-%m-%d')
-                for page in tqdm(range(1, page_count + 1), desc='Progress'):
+                pages = range(self.start_page, page_count + 1)
+                for page in tqdm(pages, desc='Progress'):
                     is_end = self.get_one_page(page)
                     if is_end:
                         break
